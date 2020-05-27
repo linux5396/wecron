@@ -24,7 +24,7 @@ A cron expression represents a set of times, using 6 space-separated fields.
 
 ---
 ```go
-func TestWeCron_AddFunc(t *testing.T) {
+func TestWeCron_(t *testing.T) {
 	cron := New()
 	//支持多个任务
 	//Every second 0 to 15 run
