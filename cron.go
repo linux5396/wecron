@@ -16,9 +16,12 @@ const (
 )
 
 //define a life style interface
+//TODO next version I want to support Suspend and Resume
 type LifeStyle interface {
-	//start a WeCron tab
-	Start()
+	//start a WeCron tab in sync
+	StartSync()
+	//start a WeCron tab in async
+	StartAsync()
 	//destroy a WeCron tab
 	Destroy()
 	//Suspend the we cron ,this version does not support it.
@@ -38,11 +41,6 @@ type WeCron struct {
 	location *time.Location //time location
 }
 
-// Job is an interface for submitted WeCron jobs.
-type Job interface {
-	Run()
-}
-
 // The Schedule describes a job's duty cycle.
 type Schedule interface {
 	// Return the next activation time, later than the given time.
@@ -54,17 +52,14 @@ type Schedule interface {
 type Task struct {
 	// The schedule on which this job should be run.
 	Schedule Schedule
-
 	// The next time the job will run. This is the zero time if WeCron has not been
 	// started or this Task's schedule is unsatisfiable
 	Next time.Time
-
 	// The last time this job was run. This is the zero time if the job has never
 	// been run.
 	Prev time.Time
-
-	// The Job to run.
-	Job Job
+	//run
+	run func()
 }
 
 // TaskDispatcher is a wrapper for sorting the Task array by time
@@ -99,18 +94,9 @@ func NewWithLocation(location *time.Location) *WeCron {
 	}
 }
 
-// A wrapper that turns a func() into a WeCron.Job
-type FuncJob func()
-
-func (f FuncJob) Run() { f() }
-
-// AddFunc adds a func to the WeCron to be run on the given schedule.
-func (c *WeCron) AddFunc(spec string, cmd func()) error {
-	return c.addJob(spec, FuncJob(cmd))
-}
-
-// AddJob adds a Job to the WeCron to be run on the given schedule.
-func (c *WeCron) addJob(spec string, cmd Job) error {
+// cron in queue
+// you can make a task in queue when wecron is running state.
+func (c *WeCron) InQueue(spec string, cmd func()) error {
 	schedule, err := Parse(spec)
 	if err != nil {
 		return err
@@ -119,11 +105,12 @@ func (c *WeCron) addJob(spec string, cmd Job) error {
 	return nil
 }
 
-// Schedule adds a Job to the WeCron to be run on the given schedule.
-func (c *WeCron) schedule(schedule Schedule, cmd Job) {
+// add new job to the new task channel
+//may wake up the run() 's routine and make a new round sorting.
+func (c *WeCron) schedule(schedule Schedule, cmd func()) {
 	Task := &Task{
 		Schedule: schedule,
-		Job:      cmd,
+		run:      cmd,
 	}
 	if c.state != Running {
 		c.tasks = append(c.tasks, Task)
@@ -132,31 +119,12 @@ func (c *WeCron) schedule(schedule Schedule, cmd Job) {
 	c.newTask <- Task
 }
 
-// Location gets the time zone location
+// return cur time zone.
 func (c *WeCron) Location() *time.Location {
 	return c.location
 }
 
-// Start the WeCron scheduler in its own go-routine, or no-op if already started.
-func (c *WeCron) Start() {
-	if c.state == Running {
-		return
-	}
-	//make it running by atomic
-	atomic.CompareAndSwapInt64(&c.state, Ready, Running)
-	go c.run()
-}
-
-// Run the WeCron scheduler, or no-op if already running.
-func (c *WeCron) Run() {
-	if c.state == Running {
-		return
-	}
-	atomic.CompareAndSwapInt64(&c.state, Ready, Running)
-	c.run()
-}
-
-func (c *WeCron) runWithRecovery(j Job) {
+func (c *WeCron) runWithRecovery(run func()) {
 	defer func() {
 		if r := recover(); r != nil {
 			const size = 64 << 10
@@ -164,10 +132,10 @@ func (c *WeCron) runWithRecovery(j Job) {
 			buf = buf[:runtime.Stack(buf, false)]
 		}
 	}()
-	j.Run()
+	run()
 }
 
-// Run the scheduler. this is private just due to the need to synchronize
+//internal running
 // access to the 'running' state variable.
 func (c *WeCron) run() {
 	// Figure out the next activation times for each Task.
@@ -175,7 +143,6 @@ func (c *WeCron) run() {
 	for _, Task := range c.tasks {
 		Task.Next = Task.Schedule.Next(now)
 	}
-
 	for {
 		// Sort the tasks every round.
 		sort.Sort(TaskDispatcher(c.tasks))
@@ -187,7 +154,6 @@ func (c *WeCron) run() {
 			//take a patience at this line, call the timer.C by the first
 			timer = time.NewTimer(c.tasks[0].Next.Sub(now))
 		}
-
 		for {
 			select {
 			case now = <-timer.C:
@@ -198,7 +164,7 @@ func (c *WeCron) run() {
 						break
 					}
 					//run with a go routine to keep currency.
-					go c.runWithRecovery(e.Job)
+					go c.runWithRecovery(e.run)
 					e.Prev = e.Next
 					e.Next = e.Schedule.Next(now)
 				}
@@ -217,6 +183,26 @@ func (c *WeCron) run() {
 			break
 		}
 	}
+}
+
+// start with inline go routine.
+//never blocked.
+func (c *WeCron) StartAsync() {
+	if c.state == Running {
+		return
+	}
+	//make it running by atomic
+	atomic.CompareAndSwapInt64(&c.state, Ready, Running)
+	go c.run() //async
+}
+
+// Run with the same go routine
+func (c *WeCron) StartSync() {
+	if c.state == Running {
+		return
+	}
+	atomic.CompareAndSwapInt64(&c.state, Ready, Running)
+	c.run()
 }
 
 //stops the WeCron scheduler if it is running; otherwise it does nothing.
