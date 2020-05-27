@@ -1,4 +1,4 @@
-package internal
+package wecron
 
 import (
 	"fmt"
@@ -78,7 +78,7 @@ func (p Parser) Parse(spec string) (Schedule, error) {
 	if len(spec) == 0 {
 		return nil, fmt.Errorf("Empty spec string")
 	}
-	// Figure out how many fields we need
+	//  how many fields we need
 	max := 0
 	for _, place := range places {
 		if p.options&place > 0 {
@@ -86,10 +86,8 @@ func (p Parser) Parse(spec string) (Schedule, error) {
 		}
 	}
 	min := max - p.optionals
-
 	// Split fields on whitespace
 	fields := strings.Fields(spec)
-
 	// Validate number of fields
 	if count := len(fields); count < min || count > max {
 		if min == max {
@@ -97,10 +95,8 @@ func (p Parser) Parse(spec string) (Schedule, error) {
 		}
 		return nil, fmt.Errorf("Expected %d to %d fields, found %d: %s", min, max, count, spec)
 	}
-
 	// Fill in missing fields
 	fields = expandFields(fields, p.options)
-
 	var err error
 	field := func(field string, r bounds) uint64 {
 		if err != nil {
@@ -150,32 +146,26 @@ func expandFields(fields []string, options ParseOption) []string {
 	return expFields
 }
 
+//only support minute level.
+//this is the standard cron tab. like Linux OS ' cron tab
 var standardParser = NewParser(
-	Minute | Hour | Dom | Month | Dow ,
+	Minute | Hour | Dom | Month | Dow,
 )
 
-// ParseStandard returns a new crontab schedule representing the given standardSpec
-// (https://en.wikipedia.org/wiki/Cron). It differs from Parse requiring to always
-// pass 5 entries representing: minute, hour, day of month, month and day of week,
-// in that order. It returns a descriptive error if the spec is not valid.
-//
-// It accepts
-//   - Standard crontab specs, e.g. "* * * * ?"
-//   - Descriptors, e.g. "@midnight", "@every 1h30m"
+//   - Standard cron tab e.g. "* * * * ?"
+//it is not support second level.
 func ParseStandard(standardSpec string) (Schedule, error) {
 	return standardParser.Parse(standardSpec)
 }
 
+//support second level cron
+//fix the lacking of minute'cron tab.
 var defaultParser = NewParser(
-	Second | Minute | Hour | Dom | Month | DowOptional ,
+	Second | Minute | Hour | Dom | Month | DowOptional,
 )
 
-// Parse returns a new crontab schedule representing the given spec.
-// It returns a descriptive error if the spec is not valid.
-//
-// It accepts
-//   - Full crontab specs, e.g. "* * * * * ?"
-//   - Descriptors, e.g. "@midnight", "@every 1h30m"
+//   - Full cron tab , e.g. "* * * * * ?"
+//it support second level.
 func Parse(spec string) (Schedule, error) {
 	return defaultParser.Parse(spec)
 }

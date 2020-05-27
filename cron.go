@@ -1,4 +1,4 @@
-package internal
+package wecron
 
 import (
 	"runtime"
@@ -31,11 +31,11 @@ type LifeStyle interface {
 // specified by the schedule. It may be started, stopped, and the tasks may
 // be inspected while running.
 type WeCron struct {
-	tasks    []*Task       //some task
-	stop     chan struct{} //a chan control stop
-	newTask  chan *Task    //a thread safe promise. when adding a new task into  we cron , I use this chan *Task to sync task.
-	state    int64         //a state change by atomic.
-	location *time.Location//time location
+	tasks    []*Task        //some task
+	stop     chan struct{}  //a chan control stop
+	newTask  chan *Task     //a thread safe promise. when adding a new task into  we cron , I use this chan *Task to sync task.
+	state    int64          //a state change by atomic.
+	location *time.Location //time location
 }
 
 // Job is an interface for submitted WeCron jobs.
@@ -91,10 +91,9 @@ func New() *WeCron {
 // In a specified zone.
 func NewWithLocation(location *time.Location) *WeCron {
 	return &WeCron{
-		tasks:   nil,
-		newTask: make(chan *Task),
-		stop:    make(chan struct{}),
-		//snapshot: make(chan []*Task),
+		tasks:    nil,
+		newTask:  make(chan *Task),
+		stop:     make(chan struct{}),
 		state:    Ready, //init ready state
 		location: location,
 	}
@@ -107,21 +106,21 @@ func (f FuncJob) Run() { f() }
 
 // AddFunc adds a func to the WeCron to be run on the given schedule.
 func (c *WeCron) AddFunc(spec string, cmd func()) error {
-	return c.AddJob(spec, FuncJob(cmd))
+	return c.addJob(spec, FuncJob(cmd))
 }
 
 // AddJob adds a Job to the WeCron to be run on the given schedule.
-func (c *WeCron) AddJob(spec string, cmd Job) error {
+func (c *WeCron) addJob(spec string, cmd Job) error {
 	schedule, err := Parse(spec)
 	if err != nil {
 		return err
 	}
-	c.Schedule(schedule, cmd)
+	c.schedule(schedule, cmd)
 	return nil
 }
 
 // Schedule adds a Job to the WeCron to be run on the given schedule.
-func (c *WeCron) Schedule(schedule Schedule, cmd Job) {
+func (c *WeCron) schedule(schedule Schedule, cmd Job) {
 	Task := &Task{
 		Schedule: schedule,
 		Job:      cmd,
@@ -130,7 +129,6 @@ func (c *WeCron) Schedule(schedule Schedule, cmd Job) {
 		c.tasks = append(c.tasks, Task)
 		return
 	}
-
 	c.newTask <- Task
 }
 
@@ -221,7 +219,7 @@ func (c *WeCron) run() {
 	}
 }
 
-// Stop stops the WeCron scheduler if it is running; otherwise it does nothing.
+//stops the WeCron scheduler if it is running; otherwise it does nothing.
 func (c *WeCron) Destroy() {
 	if c.state != Running {
 		return
