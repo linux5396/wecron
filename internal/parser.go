@@ -5,7 +5,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Configuration options for creating a parser. Most options specify which
@@ -14,6 +13,7 @@ import (
 // the order fields are parse in.
 type ParseOption int
 
+//bit of the below var are: 1、2、4、8、16、32、64
 const (
 	Second      ParseOption = 1 << iota // Seconds field, default 0
 	Minute                              // Minutes field, default 0
@@ -22,7 +22,6 @@ const (
 	Month                               // Month field, default *
 	Dow                                 // Day of week field, default *
 	DowOptional                         // Optional day of week field, default *
-	Descriptor                          // Allow descriptors such as @monthly, @weekly, etc.
 )
 
 var places = []ParseOption{
@@ -51,7 +50,7 @@ type Parser struct {
 
 // Creates a custom Parser with custom options.
 //
-//  // Standard parser without descriptors
+//  // Standard parser
 //  specParser := NewParser(Minute | Hour | Dom | Month | Dow)
 //  sched, err := specParser.Parse("0 0 15 */3 *")
 //
@@ -79,10 +78,6 @@ func (p Parser) Parse(spec string) (Schedule, error) {
 	if len(spec) == 0 {
 		return nil, fmt.Errorf("Empty spec string")
 	}
-	if spec[0] == '@' && p.options&Descriptor > 0 {
-		return parseDescriptor(spec)
-	}
-
 	// Figure out how many fields we need
 	max := 0
 	for _, place := range places {
@@ -156,7 +151,7 @@ func expandFields(fields []string, options ParseOption) []string {
 }
 
 var standardParser = NewParser(
-	Minute | Hour | Dom | Month | Dow | Descriptor,
+	Minute | Hour | Dom | Month | Dow ,
 )
 
 // ParseStandard returns a new crontab schedule representing the given standardSpec
@@ -172,7 +167,7 @@ func ParseStandard(standardSpec string) (Schedule, error) {
 }
 
 var defaultParser = NewParser(
-	Second | Minute | Hour | Dom | Month | DowOptional | Descriptor,
+	Second | Minute | Hour | Dom | Month | DowOptional ,
 )
 
 // Parse returns a new crontab schedule representing the given spec.
@@ -266,7 +261,7 @@ func getRange(expr string, r bounds) (uint64, error) {
 		return 0, fmt.Errorf("Step of range should be a positive number: %s", expr)
 	}
 
-	return getBits(start, end, step) | extra, nil
+	return setBits(start, end, step) | extra, nil
 }
 
 // parseIntOrName returns the (possibly-named) integer contained in expr.
@@ -292,8 +287,8 @@ func mustParseInt(expr string) (uint, error) {
 	return uint(num), nil
 }
 
-// getBits sets all bits in the range [min, max], modulo the given step size.
-func getBits(min, max, step uint) uint64 {
+// setBits sets all bits in the range [min, max], modulo the given step size.
+func setBits(min, max, step uint) uint64 {
 	var bits uint64
 
 	// If step is 1, use shifts.
@@ -306,75 +301,4 @@ func getBits(min, max, step uint) uint64 {
 		bits |= 1 << i
 	}
 	return bits
-}
-
-// all returns all bits within the given bounds.  (plus the star bit)
-func all(r bounds) uint64 {
-	return getBits(r.min, r.max, 1) | starBit
-}
-
-// parseDescriptor returns a predefined schedule for the expression, or error if none matches.
-func parseDescriptor(descriptor string) (Schedule, error) {
-	switch descriptor {
-	case "@yearly", "@annually":
-		return &SpecSchedule{
-			Second: 1 << seconds.min,
-			Minute: 1 << minutes.min,
-			Hour:   1 << hours.min,
-			Dom:    1 << dom.min,
-			Month:  1 << months.min,
-			Dow:    all(dow),
-		}, nil
-
-	case "@monthly":
-		return &SpecSchedule{
-			Second: 1 << seconds.min,
-			Minute: 1 << minutes.min,
-			Hour:   1 << hours.min,
-			Dom:    1 << dom.min,
-			Month:  all(months),
-			Dow:    all(dow),
-		}, nil
-
-	case "@weekly":
-		return &SpecSchedule{
-			Second: 1 << seconds.min,
-			Minute: 1 << minutes.min,
-			Hour:   1 << hours.min,
-			Dom:    all(dom),
-			Month:  all(months),
-			Dow:    1 << dow.min,
-		}, nil
-
-	case "@daily", "@midnight":
-		return &SpecSchedule{
-			Second: 1 << seconds.min,
-			Minute: 1 << minutes.min,
-			Hour:   1 << hours.min,
-			Dom:    all(dom),
-			Month:  all(months),
-			Dow:    all(dow),
-		}, nil
-
-	case "@hourly":
-		return &SpecSchedule{
-			Second: 1 << seconds.min,
-			Minute: 1 << minutes.min,
-			Hour:   all(hours),
-			Dom:    all(dom),
-			Month:  all(months),
-			Dow:    all(dow),
-		}, nil
-	}
-
-	const every = "@every "
-	if strings.HasPrefix(descriptor, every) {
-		duration, err := time.ParseDuration(descriptor[len(every):])
-		if err != nil {
-			return nil, fmt.Errorf("Failed to parse duration %s: %s", descriptor, err)
-		}
-		return Every(duration), nil
-	}
-
-	return nil, fmt.Errorf("Unrecognized descriptor: %s", descriptor)
 }

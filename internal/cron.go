@@ -8,6 +8,7 @@ import (
 )
 
 //definite 3 const state
+//ready ->running -> stop
 const (
 	Running int64 = iota
 	Ready
@@ -16,10 +17,14 @@ const (
 
 //define a life style interface
 type LifeStyle interface {
-	//init a WeCron tab
-	Init()
+	//start a WeCron tab
+	Start()
 	//destroy a WeCron tab
 	Destroy()
+	//Suspend the we cron ,this version does not support it.
+	//Suspend()
+	//Resume the suspend we cron ,this version does not support it.
+	//Resume()
 }
 
 // WeCron keeps track of any number of tasks, invoking the associated func as
@@ -29,8 +34,8 @@ type WeCron struct {
 	tasks    []*Task       //some task
 	stop     chan struct{} //a chan control stop
 	newTask  chan *Task    //a thread safe promise. when adding a new task into  we cron , I use this chan *Task to sync task.
-	state    int64         //a state change by atomic
-	location *time.Location
+	state    int64         //a state change by atomic.
+	location *time.Location//time location
 }
 
 // Job is an interface for submitted WeCron jobs.
@@ -69,9 +74,6 @@ type TaskDispatcher []*Task
 func (s TaskDispatcher) Len() int      { return len(s) }
 func (s TaskDispatcher) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 func (s TaskDispatcher) Less(i, j int) bool {
-	// Two zero times should return false.
-	// Otherwise, zero is "greater" than any other time.
-	// (To sort it at the end of the list.)
 	if s[i].Next.IsZero() {
 		return false
 	}
@@ -81,12 +83,12 @@ func (s TaskDispatcher) Less(i, j int) bool {
 	return s[i].Next.Before(s[j].Next)
 }
 
-// New returns a new WeCron job runner, in the Local time zone.
+//In Local zone.
 func New() *WeCron {
 	return NewWithLocation(time.Now().Location())
 }
 
-// NewWithLocation returns a new WeCron job runner.
+// In a specified zone.
 func NewWithLocation(location *time.Location) *WeCron {
 	return &WeCron{
 		tasks:   nil,
@@ -177,15 +179,14 @@ func (c *WeCron) run() {
 	}
 
 	for {
-		// Determine the next Task to run.
+		// Sort the tasks every round.
 		sort.Sort(TaskDispatcher(c.tasks))
-
 		var timer *time.Timer
+		//if there are no tasks, make it blocked till newTask channel recv task.
 		if len(c.tasks) == 0 || c.tasks[0].Next.IsZero() {
-			// If there are no tasks yet, just sleep - it still handles new tasks
-			// and stop requests.
-			timer = time.NewTimer(100000 * time.Hour)
+			timer = time.NewTimer(time.Hour * 996)
 		} else {
+			//take a patience at this line, call the timer.C by the first
 			timer = time.NewTimer(c.tasks[0].Next.Sub(now))
 		}
 
@@ -193,23 +194,24 @@ func (c *WeCron) run() {
 			select {
 			case now = <-timer.C:
 				now = now.In(c.location)
-				// Run every Task whose next time was less than now
 				for _, e := range c.tasks {
 					if e.Next.After(now) || e.Next.IsZero() {
+						//because the tasks sorted early,so if a task is after now, the whole next tasks are after now.
 						break
 					}
+					//run with a go routine to keep currency.
 					go c.runWithRecovery(e.Job)
 					e.Prev = e.Next
 					e.Next = e.Schedule.Next(now)
 				}
 
-			case newTask := <-c.newTask:
+			case newTask := <-c.newTask: //add new task
 				timer.Stop()
 				now = c.now()
 				newTask.Next = newTask.Schedule.Next(now)
 				c.tasks = append(c.tasks, newTask)
 
-			case <-c.stop:
+			case <-c.stop: //stop the world
 				timer.Stop()
 				return
 			}
@@ -220,7 +222,7 @@ func (c *WeCron) run() {
 }
 
 // Stop stops the WeCron scheduler if it is running; otherwise it does nothing.
-func (c *WeCron) Stop() {
+func (c *WeCron) Destroy() {
 	if c.state != Running {
 		return
 	}
@@ -228,21 +230,7 @@ func (c *WeCron) Stop() {
 	atomic.CompareAndSwapInt64(&c.state, Running, Stop)
 }
 
-// TaskSnapshot returns a copy of the current WeCron Task list.
-func (c *WeCron) TaskSnapshot() []*Task {
-	tasks := []*Task{}
-	for _, e := range c.tasks {
-		tasks = append(tasks, &Task{
-			Schedule: e.Schedule,
-			Next:     e.Next,
-			Prev:     e.Prev,
-			Job:      e.Job,
-		})
-	}
-	return tasks
-}
-
-// now returns current time in c location
+//return current time in cron's location
 func (c *WeCron) now() time.Time {
 	return time.Now().In(c.location)
 }
