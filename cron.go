@@ -15,9 +15,9 @@ const (
 	Stop
 )
 
-//define a life style interface
+//define a life cycle interface
 //TODO next version I want to support Suspend and Resume
-type LifeStyle interface {
+type LifeCycle interface {
 	//start a WeCron tab in sync
 	StartSync()
 	//start a WeCron tab in async
@@ -41,10 +41,10 @@ type WeCron struct {
 	location *time.Location //time location
 }
 
-// The Schedule describes a job's duty cycle.
+// The schedule uses Next time to indicate the time period of work
 type Schedule interface {
 	// Return the next activation time, later than the given time.
-	// Next is invoked initially, and then each time the job is run.
+	// Next is invoked initially, and then each time the task is run.
 	Next(time.Time) time.Time
 }
 
@@ -63,7 +63,6 @@ type Task struct {
 }
 
 // TaskDispatcher is a wrapper for sorting the Task array by time
-// (with zero time at the end).
 type TaskDispatcher []*Task
 
 func (s TaskDispatcher) Len() int      { return len(s) }
@@ -78,7 +77,7 @@ func (s TaskDispatcher) Less(i, j int) bool {
 	return s[i].Next.Before(s[j].Next)
 }
 
-//In Local zone.
+//By current time zone
 func New() *WeCron {
 	return NewWithLocation(time.Now().Location())
 }
@@ -94,8 +93,7 @@ func NewWithLocation(location *time.Location) *WeCron {
 	}
 }
 
-// cron in queue
-// you can make a task in queue when wecron is running state.
+//Add a timed task to the queue, when the instance is running, you can still continue to add
 func (c *WeCron) InQueue(spec string, cmd func()) error {
 	schedule, err := Parse(spec)
 	if err != nil {
@@ -119,11 +117,12 @@ func (c *WeCron) schedule(schedule Schedule, cmd func()) {
 	c.newTask <- Task
 }
 
-// return cur time zone.
+//Returns the time zone of the current instance
 func (c *WeCron) Location() *time.Location {
 	return c.location
 }
 
+//Use recovery mechanism to run tasks and avoid panic
 func (c *WeCron) runWithRecovery(run func()) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -135,8 +134,7 @@ func (c *WeCron) runWithRecovery(run func()) {
 	run()
 }
 
-//internal running
-// access to the 'running' state variable.
+//The core operation method, the instance is in a running state
 func (c *WeCron) run() {
 	// Figure out the next activation times for each Task.
 	now := c.now()
@@ -145,6 +143,7 @@ func (c *WeCron) run() {
 	}
 	for {
 		// Sort the tasks every round.
+		//do you need to use time heap for optimization
 		sort.Sort(TaskDispatcher(c.tasks))
 		var timer *time.Timer
 		//if there are no tasks, make it blocked till newTask channel recv task.
@@ -185,8 +184,7 @@ func (c *WeCron) run() {
 	}
 }
 
-// start with inline go routine.
-//never blocked.
+//Start the instance asynchronously to avoid blocking
 func (c *WeCron) StartAsync() {
 	if c.state == Running {
 		return
@@ -196,7 +194,7 @@ func (c *WeCron) StartAsync() {
 	go c.run() //async
 }
 
-// Run with the same go routine
+// Start the instance synchronously, it will block
 func (c *WeCron) StartSync() {
 	if c.state == Running {
 		return
@@ -205,7 +203,8 @@ func (c *WeCron) StartSync() {
 	c.run()
 }
 
-//stops the WeCron scheduler if it is running; otherwise it does nothing.
+// Destroy the instance to ensure that the next scheduled task will no longer be executed
+//However, the scheduled task that is already being executed can only be handed over to continue execution until it is completed
 func (c *WeCron) Destroy() {
 	if c.state != Running {
 		return
@@ -214,7 +213,7 @@ func (c *WeCron) Destroy() {
 	atomic.CompareAndSwapInt64(&c.state, Running, Stop)
 }
 
-//return current time in cron's location
+//Returns the current time in the time zone of the current instance
 func (c *WeCron) now() time.Time {
 	return time.Now().In(c.location)
 }
