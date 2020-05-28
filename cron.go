@@ -190,8 +190,11 @@ func (c *WeCron) StartAsync() {
 		return
 	}
 	//make it running by atomic
-	atomic.CompareAndSwapInt64(&c.state, Ready, Running)
-	go c.run() //async
+	if atomic.CompareAndSwapInt64(&c.state, Ready, Running) {
+		go c.run()
+	} else {
+		panic("wecron 'state is not readu , cannot invoke StartSync")
+	}
 }
 
 // Start the instance synchronously, it will block
@@ -199,8 +202,11 @@ func (c *WeCron) StartSync() {
 	if c.state == Running {
 		return
 	}
-	atomic.CompareAndSwapInt64(&c.state, Ready, Running)
-	c.run()
+	if atomic.CompareAndSwapInt64(&c.state, Ready, Running) {
+		c.run()
+	} else {
+		panic("wecron 'state is not readu , cannot invoke StartSync")
+	}
 }
 
 // Destroy the instance to ensure that the next scheduled task will no longer be executed
@@ -209,8 +215,11 @@ func (c *WeCron) Destroy() {
 	if c.state != Running {
 		return
 	}
-	c.stop <- struct{}{}
-	atomic.CompareAndSwapInt64(&c.state, Running, Stop)
+	if atomic.CompareAndSwapInt64(&c.state, Running, Stop) {
+		c.stop <- struct{}{}
+		return
+	}
+	panic("wecron ' state is not running, cannot invoke Destroy.")
 }
 
 //Returns the current time in the time zone of the current instance
